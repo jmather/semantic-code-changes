@@ -1,0 +1,417 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:composable-reviews:manifest:0",
+  "title": "Review manifest, version 0",
+  "description": "The authored description of one review: a set of inter-related changes presented as a graph of optional capabilities. Write it in YAML (read as YAML 1.2, so keys such as `on` stay strings) or JSON. The manifest is authoritative for intent and is never inferred from pull requests, so say as much as a reviewer needs. Relationships live on two layers kept in different places: capability-layer edges (`requires`, `conflicts`) are plain properties of a capability and are true whatever the code looks like; implementation-layer relations (a glue capability's `glue.when` triggers, a realization's `subsumes`, and the `contracts` section) describe how the code combines as it stands today. Decisions are never written here. This schema checks shape only; rules that span the document (unique ids, references that resolve, an acyclic `requires` graph, `subsumes` naming a capability realized in the same repository) are checked by the validator and reported with the path of the offending field.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["manifest", "review", "repos", "capabilities"],
+  "properties": {
+    "manifest": {
+      "description": "Manifest format version. Always 0 for this schema.",
+      "const": 0
+    },
+    "review": { "$ref": "#/$defs/review" },
+    "repos": {
+      "description": "The source repositories the review's changes live in, keyed by a short name that the rest of the manifest uses in `repo` fields. Source repositories are only ever read, never written.",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/repo" }
+    },
+    "capabilities": {
+      "description": "The selectable units of change, in the order a reader should meet them. Declaration order matters: it breaks ties when ordering a merge plan, so list a capability after the ones it builds on where you can.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/capability" }
+    },
+    "offers": {
+      "description": "Selections you explicitly present as candidates, such as 'minimum', 'recommended' or 'everything'. Offers are always proven by the builder, so use them to bound the combinations you have actually reconciled.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/offer" }
+    },
+    "contracts": {
+      "description": "Implementation layer. Named interfaces between a producer and one or more consumers, usually across repositories: an artifact plus the capabilities that change each side. A contract adds no edge to the graph; if a consumer cannot work without its producer, declare that with `requires` as well.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/contract" }
+    },
+    "traces": {
+      "description": "Ordered paths that follow one field or concept through several systems, hop by hop, each hop with its own probe. Lets a reviewer see where a partial selection leaves the path broken.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/trace" }
+    },
+    "checks": {
+      "description": "Declared verifications, run against the composed tree of every closure the check applies to. A probe is declarative and runs for anyone; a command runs arbitrary code and only for trusted authors. A subsumed capability's behaviour is evidenced by its own checks running against the composition, not by ancestry, so give each capability checks of its own.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/check" }
+    }
+  },
+  "$defs": {
+    "id": {
+      "description": "An identifier: lower case letters, digits and hyphens, starting with a letter. Capability, contract, trace, offer and check ids must all be unique across the manifest.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+      "maxLength": 64
+    },
+    "idList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/id" },
+      "uniqueItems": true
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ref": {
+      "description": "A git ref name in the repository, such as a branch name. Not a commit SHA: the builder pins SHAs itself.",
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\\s~^:?*\\[\\\\]+$"
+    },
+    "review": {
+      "description": "What the review is, in product terms.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "summary"],
+      "properties": {
+        "title": {
+          "description": "One line naming the change as a whole, for the top of the view.",
+          "$ref": "#/$defs/text"
+        },
+        "summary": {
+          "description": "A short paragraph for a reviewer who has not seen the work: what was asked for, what else was found on the way, and what they are being asked to choose.",
+          "$ref": "#/$defs/text"
+        },
+        "origin": {
+          "description": "Optional. The undivided change this review was decomposed from, such as the original tangled branch. Shown for context only; never part of a closure or a merge plan.",
+          "$ref": "#/$defs/located"
+        }
+      }
+    },
+    "repo": {
+      "description": "One source repository.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["github", "base"],
+      "properties": {
+        "github": {
+          "description": "The repository on GitHub, as owner/name.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$"
+        },
+        "base": {
+          "description": "The branch every change in this repository is meant to land on. Compositions start from it.",
+          "$ref": "#/$defs/ref"
+        }
+      }
+    },
+    "locator": {
+      "description": "Where a change is, as a tagged object. `kind` says how to read the rest. Only the `github-ref` kind is defined now; other kinds may be added later without changing the rest of the manifest.",
+      "$ref": "#/$defs/githubRefLocator"
+    },
+    "githubRefLocator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "head"],
+      "properties": {
+        "kind": {
+          "description": "`github-ref`: a ref in the GitHub repository named by the enclosing `repo`.",
+          "const": "github-ref"
+        },
+        "head": {
+          "description": "The branch holding the change. The change is what this branch adds to the repository's `base`.",
+          "$ref": "#/$defs/ref"
+        },
+        "pr": {
+          "description": "Optional. The number of the open pull request for `head`, if there is one. Lets the merge plan name pull requests.",
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "located": {
+      "description": "A change in one repository.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo", "locator"],
+      "properties": {
+        "repo": {
+          "description": "A key of `repos`.",
+          "$ref": "#/$defs/id"
+        },
+        "locator": { "$ref": "#/$defs/locator" }
+      }
+    },
+    "capability": {
+      "description": "An independently meaningful, selectable unit of change, described in product terms rather than as a pull request. Capability-layer edges (`requires`, `conflicts`) are properties of the capability itself. Implementation-layer relations sit inside `glue` and inside `realizations`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "realizations"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "title": {
+          "description": "What this capability does, in a reviewer's words.",
+          "$ref": "#/$defs/text"
+        },
+        "why": {
+          "description": "Optional but strongly recommended. Why someone would want this, or for glue, why the capabilities it joins need reconciling.",
+          "$ref": "#/$defs/text"
+        },
+        "anchor": {
+          "description": "Capability layer. true when the author needs this capability whatever the decision. Anchors are part of every closure and cannot be deselected. A glue capability cannot be an anchor.",
+          "type": "boolean"
+        },
+        "requires": {
+          "description": "Capability layer. Ids of capabilities this one cannot be selected without. Transitive. Must not form a cycle. Declare it only when it is true in meaning, not merely because of how the branches were cut.",
+          "$ref": "#/$defs/idList"
+        },
+        "conflicts": {
+          "description": "Capability layer. Ids of capabilities that must not be selected together with this one. Symmetric: declaring it on one side is enough. A closure containing both is invalid, and the viewer explains why.",
+          "$ref": "#/$defs/idList"
+        },
+        "glue": {
+          "description": "Present only on a glue capability: one that exists to make two or more others work together. Glue is never selected directly. It is included automatically exactly when every capability in `when` is in the closure, and excluded otherwise. It is a conditional fan-in, not a dependency.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["when"],
+          "properties": {
+            "when": {
+              "description": "Implementation layer. The ids of the capabilities whose combination this glue reconciles. At least two. A glue may name another glue here.",
+              "$ref": "#/$defs/idList",
+              "type": "array",
+              "minItems": 2
+            }
+          }
+        },
+        "realizations": {
+          "description": "The concrete changes that implement this capability, at most one per repository. A capability realized across several repositories has one entry for each.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/realization" }
+        }
+      },
+      "not": {
+        "description": "A glue capability cannot be an anchor.",
+        "required": ["anchor", "glue"],
+        "properties": { "anchor": { "const": true } }
+      }
+    },
+    "realization": {
+      "description": "One concrete change implementing (part of) a capability, in one repository.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo", "locator"],
+      "properties": {
+        "repo": {
+          "description": "A key of `repos`.",
+          "$ref": "#/$defs/id"
+        },
+        "locator": { "$ref": "#/$defs/locator" },
+        "subsumes": {
+          "description": "Implementation layer. Ids of capabilities whose realization in this same repository this change already contains, because its head was built on theirs. Typical for glue that is 'A and B, reconciled', and for a branch stacked on another. When both are in a closure, the subsumed one is not merged separately: the merge plan says it is included by this one. The builder verifies every claim by ancestry and fails the build, naming both heads, if a claim is false or has gone stale. Inclusion is about commits only; behaviour is evidenced by checks.",
+          "$ref": "#/$defs/idList",
+          "type": "array",
+          "minItems": 1
+        }
+      }
+    },
+    "offer": {
+      "description": "A selection presented as a candidate.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "select"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "title": {
+          "description": "A short name for the candidate, such as 'Just the agent'.",
+          "$ref": "#/$defs/text"
+        },
+        "why": {
+          "description": "Optional. Why a reviewer might pick this one.",
+          "$ref": "#/$defs/text"
+        },
+        "select": {
+          "description": "The capability ids to select. Anchors, requirements and triggered glue are added by closure, so list only the choices. Never list a glue capability; it cannot be chosen directly. May be empty.",
+          "$ref": "#/$defs/idList"
+        }
+      }
+    },
+    "contract": {
+      "description": "A named interface between a producer and its consumers.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "artifact", "producer", "consumers"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "title": {
+          "description": "What the interface is, such as 'Order response'.",
+          "$ref": "#/$defs/text"
+        },
+        "why": {
+          "description": "Optional. What a reviewer should watch for across this boundary.",
+          "$ref": "#/$defs/text"
+        },
+        "artifact": {
+          "description": "The file that defines the interface: a schema, DTO, API description or model definition.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repo", "file"],
+          "properties": {
+            "repo": {
+              "description": "A key of `repos`.",
+              "$ref": "#/$defs/id"
+            },
+            "file": { "$ref": "#/$defs/path" }
+          }
+        },
+        "producer": {
+          "description": "Ids of the capabilities that change the producing side.",
+          "$ref": "#/$defs/idList",
+          "type": "array",
+          "minItems": 1
+        },
+        "consumers": {
+          "description": "Ids of the capabilities that change a consuming side.",
+          "$ref": "#/$defs/idList",
+          "type": "array",
+          "minItems": 1
+        }
+      }
+    },
+    "trace": {
+      "description": "One field or concept followed through several systems.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "hops"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "title": {
+          "description": "What is being followed, such as 'Contact window, form to warehouse'.",
+          "$ref": "#/$defs/text"
+        },
+        "why": {
+          "description": "Optional. Why the path matters.",
+          "$ref": "#/$defs/text"
+        },
+        "contract": {
+          "description": "Optional. The id of the contract this trace belongs to. Omit for a trace that stands alone.",
+          "$ref": "#/$defs/id"
+        },
+        "hops": {
+          "description": "The systems the field passes through, in the order it travels. At least two.",
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/hop" }
+        }
+      }
+    },
+    "hop": {
+      "description": "One system on a trace, with one probe that shows the field is present there.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "probe"],
+      "properties": {
+        "id": {
+          "description": "Unique within this trace.",
+          "$ref": "#/$defs/id"
+        },
+        "title": {
+          "description": "The system at this hop, such as 'Backend DTO'.",
+          "$ref": "#/$defs/text"
+        },
+        "capability": {
+          "description": "Optional. The id of the capability whose change brings the field to this hop. Omit when the hop is already in place on the base.",
+          "$ref": "#/$defs/id"
+        },
+        "probe": { "$ref": "#/$defs/probe" }
+      }
+    },
+    "check": {
+      "description": "A declared verification. Exactly one of `probe` or `command`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "on"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "title": {
+          "description": "Optional. What the check shows, in a reviewer's words.",
+          "$ref": "#/$defs/text"
+        },
+        "on": {
+          "description": "What the check is attached to: a capability id (it runs in every closure containing that capability), a contract or trace id (every closure containing any of its capabilities), or \"*\" (every closure).",
+          "anyOf": [{ "$ref": "#/$defs/id" }, { "const": "*" }]
+        },
+        "evidence": {
+          "description": "Which evidence lane the result belongs to. `declared` (the default) for an ordinary check; `semantic` for one that speaks to meaning surviving a boundary, such as a type, default or error behaviour.",
+          "enum": ["declared", "semantic"],
+          "default": "declared"
+        },
+        "probe": { "$ref": "#/$defs/probe" },
+        "command": { "$ref": "#/$defs/command" }
+      },
+      "oneOf": [{ "required": ["probe"] }, { "required": ["command"] }]
+    },
+    "path": {
+      "description": "A file path relative to the repository root, with forward slashes.",
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$)).+$"
+    },
+    "probe": {
+      "description": "A declarative lookup in one file of a composed tree. Executes nothing from the source, so it runs for anyone. Exactly one of `exists`, `text` or `pointer`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo", "file"],
+      "properties": {
+        "repo": {
+          "description": "A key of `repos`: whose composed tree to look in. May differ from the repository of the capability the check is on.",
+          "$ref": "#/$defs/id"
+        },
+        "file": { "$ref": "#/$defs/path" },
+        "exists": {
+          "description": "true: passes when the file exists. false: passes when it does not.",
+          "type": "boolean"
+        },
+        "text": {
+          "description": "An ECMAScript regular expression (no delimiters, multiline mode). Passes when it matches somewhere in the file.",
+          "$ref": "#/$defs/text"
+        },
+        "pointer": {
+          "description": "A JSON Pointer (RFC 6901) into the file, parsed as JSON or YAML by its extension. Passes when the pointed-to value exists, and if `equals` is given, when it equals that value.",
+          "type": "string",
+          "pattern": "^(/([^~/]|~[01])*)*$"
+        },
+        "equals": {
+          "description": "Only with `pointer`. The value the pointed-to value must equal."
+        }
+      },
+      "oneOf": [
+        { "required": ["exists"] },
+        { "required": ["text"] },
+        { "required": ["pointer"] }
+      ],
+      "dependentRequired": { "equals": ["pointer"] }
+    },
+    "command": {
+      "description": "Arbitrary code run against a composed tree. Runs only for trusted authors, and even then isolated: in a container that mounts only the composed tree, with an empty environment and no network unless asked. For anyone else it is recorded as skipped, never run.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo", "run"],
+      "properties": {
+        "repo": {
+          "description": "A key of `repos`: whose composed tree to run in. The command's working directory is that tree's root.",
+          "$ref": "#/$defs/id"
+        },
+        "run": {
+          "description": "The shell command line. Exit status 0 passes.",
+          "$ref": "#/$defs/text"
+        },
+        "network": {
+          "description": "true if the command needs network access. Defaults to false.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    }
+  }
+}
